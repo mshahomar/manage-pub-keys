@@ -47,6 +47,63 @@ def send_email(subject, body, recipients):
 
     print(f"Email sent to {', '.join(recipients)}. Message ID: {response['MessageId']}")
 
+
+def import_ssh_public_key(user_name):
+    bucket_name = user_name.replace('_', '-')
+    s3_folder = 'KEY'
+    key_prefix = f'{s3_folder}/'
+
+    # Initialize S3 client
+    s3_client = boto3.client('s3')
+
+    # Get the list of objects in the S3 bucket's KEY folder
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=key_prefix)
+
+    if 'Contents' in response:
+        # Sort the objects based on the LastModified timestamp
+        objects = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
+
+        if objects:
+            # Check if the most recent object is a .pub file
+            if objects[0]['Key'].endswith('.pub'):
+                # Import a new SSH public key
+                new_key_content = s3_client.get_object(Bucket=bucket_name, Key=objects[0]['Key'])['Body'].read().decode('utf-8')
+                import_ssh_key_response = boto3.client('transfer').import_ssh_public_key(
+                    ServerId=user_name,
+                    SshPublicKeyBody=new_key_content,
+                    UserName=user_name
+                )
+                print(f"Imported new SSH public key for user {user_name}. Key ID: {import_ssh_key_response['SshPublicKeyId']}")
+            else:
+                print(f"Skipping non-.pub file found for user {user_name}")
+
+        if len(objects) >= 2:
+            # Delete the SSH public key that has exceeded 90 days
+            if (datetime.now() - objects[1]['LastModified'].replace(tzinfo=None)) > timedelta(days=90):
+                ssh_key_id = objects[1]['Key'].split('_')[-1]
+                delete_ssh_public_key(ssh_key_id)
+
+    else:
+        # Import a new SSH public key if no key is found
+        print(f"No existing SSH public key found for user {user_name}. Importing a new key.")
+        new_key_content = s3_client.get_object(Bucket=bucket_name, Key=f'{s3_folder}/{user_name}_new_ssh_public_key.pub')['Body'].read().decode('utf-8')
+        import_ssh_key_response = boto3.client('transfer').import_ssh_public_key(
+            ServerId=user_name,
+            SshPublicKeyBody=new_key_content,
+            UserName=user_name
+        )
+        print(f"Imported new SSH public key for user {user_name}. Key ID: {import_ssh_key_response['SshPublicKeyId']}")
+
+
+def delete_ssh_public_key(ssh_key_id):
+    # Initialize Transfer client
+    transfer_client = boto3.client('transfer')
+
+    # Delete the SSH public key
+    transfer_client.delete_ssh_public_key(SshPublicKeyId=ssh_key_id)
+    print(f"Deleted SSH public key with ID {ssh_key_id}")
+
+
 def check_key_expiration(bucket, prefix, days_threshold, notification_threshold, deletion_threshold, recipient_emails):
     response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
 
@@ -73,44 +130,25 @@ def check_key_expiration(bucket, prefix, days_threshold, notification_threshold,
                 print(f"Deleting expired key: {obj['Key']}")
                 # Delete the public key logic (replace with your actual deletion logic)
 
-def check_transfer_user_keys(username, days_threshold, recipient_emails):
-    response = transfer_client.list_ssh_public_keys(ServerId=tf_server_id)
-    
-    for key in response['SshPublicKeys']:
-        uploaded_at = key['DateUploaded'].replace(tzinfo=None)
-        age = datetime.now() - uploaded_at
-        remaining_days = days_threshold - age.days
-
-        if 0 < remaining_days <= notification_threshold:
-            subject = f"Transfer user {username}'s key will expire in {remaining_days} days"
-            body = f"The public key {key['SshPublicKeyId']} for Transfer user {username} will expire in {remaining_days} days. Please update."
-            send_email(subject, body, recipient_emails)
-
-        if remaining_days <= 0:
-            print(f"Transfer user {username}'s key has expired: {key['SshPublicKeyId']}")
-            # Add deletion logic here if needed
-            if age.days > deletion_threshold:
-                print(f"Deleting expired key: {key['SshPublicKeyId']}")
-                # Delete the public key logic (replace with your actual deletion logic)
 
 def check_transfer_pub_keys(username, days_threshold, recipient_emails):
     resp = transfer_client.describe_user(ServerId=tf_server_id, UserName=username)
     users = resp.get('User', [])
-    
+
     date_imported = ''
     pub_key_body = []
-    
+
     for keys in users['SshPublicKeys']:
         date_imported = keys['DateImported'].replace(tzinfo=None)
         pub_key_body.append(keys['SshPublicKeyBody'])
-        
+
     age = datetime.now() - date_imported
     remaining_days = days_threshold - age.days
-        
+
     print(f"There are {len(pub_key_body)} key(s) for user {username}")
     for key in pub_key_body:
         print(f"Public Keys: {key}. \nDate Imported: {date_imported}.")
-        
+
         if 0 < remaining_days <= notification_threshold:
             print(f"This key will expire in {remaining_days} days")
             subject = f"Transfer user {username}'s key will expire in {remaining_days} days"
@@ -123,6 +161,30 @@ def check_transfer_pub_keys(username, days_threshold, recipient_emails):
             if age.days > deletion_threshold:
                 print(f"Deleting expired key for user {username}")
                 # Delete the public key logic (replace with your actual deletion logic)
+
+    # Updated code to fetch any .pub file in the 'KEY' folder
+    key_prefix = f'{s3_folder}{username}_'
+    response = s3_client.list_objects_v2(Bucket=f'{username.replace("_", "-")}', Prefix=key_prefix)
+
+    if 'Contents' in response:
+        # Sort the objects based on the LastModified timestamp
+        objects = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
+
+        if objects:
+            # Check if the most recent object is a .pub file
+            if objects[0]['Key'].endswith('.pub'):
+                # Import a new SSH public key
+                new_key_content = s3_client.get_object(Bucket=f'{username.replace("_", "-")}', Key=objects[0]['Key'])['Body'].read().decode('utf-8')
+                import_ssh_public_key(username)
+            else:
+                print(f"Skipping non-.pub file found for user {username}")
+
+        if len(objects) >= 2:
+            # Delete the SSH public key that has exceeded 90 days
+            if (datetime.now() - objects[1]['LastModified'].replace(tzinfo=None)) > timedelta(days=90):
+                ssh_key_id = objects[1]['Key'].split('_')[-1]
+                delete_ssh_public_key(ssh_key_id)
+
 
 def lambda_handler(event, context):
     # Check PubKeys in S3 Buckets
