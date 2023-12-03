@@ -123,7 +123,8 @@ def check_key_expiration(bucket, prefix, days_threshold, notification_threshold,
         if 0 < remaining_days <= notification_threshold:
             subject = f"Public key in {bucket_name}/{prefix} will expire in {remaining_days} days"
             body = f"The public key {obj['Key']} in {bucket_name}/{prefix} will expire in {remaining_days} days. Please update."
-            send_email(subject, body, recipient_emails)
+            print(f"Sending Email on expiration of public key {obj['Key']} in {bucket_name}/{prefix} which will expire in {remaining_days} days.")
+            # send_email(subject, body, recipient_emails)
 
         if remaining_days <= 0:
             print(f"Key in {bucket_name}/{prefix} has expired: {obj['Key']}")
@@ -131,6 +132,7 @@ def check_key_expiration(bucket, prefix, days_threshold, notification_threshold,
             if age.days > deletion_threshold:
                 print(f"Deleting expired key: {obj['Key']}")
                 # Delete the public key logic (replace with your actual deletion logic)
+
 
 def check_transfer_pub_keys(username, days_threshold, recipient_emails):
     resp = transfer_client.describe_user(ServerId=tf_server_id, UserName=username)
@@ -154,7 +156,8 @@ def check_transfer_pub_keys(username, days_threshold, recipient_emails):
             print(f"This key will expire in {remaining_days} days")
             subject = f"Transfer user {username}'s key will expire in {remaining_days} days"
             body = f"The public key for Transfer user {username} will expire in {remaining_days} days. Please upload a new public key."
-            send_email(subject, body, recipient_emails)
+            print(f"Sending email on expiration of public key for Transfer user {username} which will expire in {remaining_days} days.")
+            # send_email(subject, body, recipient_emails)
 
         if remaining_days <= 0:
             print(f"Transfer user {username}'s key has expired. Public Key: {key}")
@@ -165,7 +168,16 @@ def check_transfer_pub_keys(username, days_threshold, recipient_emails):
 
     # Updated code to fetch any .pub file in the 'KEY' folder
     key_prefix = f'{s3_folder}{username}_'
-    response = s3_client.list_objects_v2(Bucket=f'{username.replace("_", "-")}', Prefix=key_prefix)
+    bucket_name = username.replace("_", "-")
+    
+    try:
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=key_prefix)
+    except s3_client.exceptions.NoSuchBucket as e:
+        print(f"Error listing objects in bucket {bucket_name}: {str(e)}")
+        return
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        return
 
     if 'Contents' in response:
         # Sort the objects based on the LastModified timestamp
@@ -175,7 +187,7 @@ def check_transfer_pub_keys(username, days_threshold, recipient_emails):
             # Check if the most recent object is a .pub file
             if objects[0]['Key'].endswith('.pub'):
                 # Import a new SSH public key
-                new_key_content = s3_client.get_object(Bucket=f'{username.replace("_", "-")}', Key=objects[0]['Key'])['Body'].read().decode('utf-8')
+                new_key_content = s3_client.get_object(Bucket=bucket_name, Key=objects[0]['Key'])['Body'].read().decode('utf-8')
                 import_ssh_public_key(username)
             else:
                 print(f"Skipping non-.pub file found for user {username}")
