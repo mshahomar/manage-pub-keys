@@ -17,10 +17,10 @@ s3_folder = 'KEY/'
 file_extension = '.pub'
 transfer_key_threshold = 30
 notification_threshold = 10
-deletion_threshold = s3_key_threshold + notification_threshold + 10
-sender_email = "system1@myemail.com"
-recipient_email_1 = "user1@example.com"
-tf_server_id = "s-xxxxxxxxxxx"
+deletion_threshold = s3_key_threshold + 10
+sender_email = os.environ['SES_SENDER_EMAIL']
+recipient_email_1 = os.environ['SES_RECIPIENT_1']
+tf_server_id = os.environ['TF_SERVER_ID']
 
 def send_email(subject, body, recipients):
     sender = sender_email  # Replace with your SES verified sender email address
@@ -105,7 +105,9 @@ def delete_ssh_public_key(ssh_key_id):
 
 
 def check_key_expiration(bucket, prefix, days_threshold, notification_threshold, deletion_threshold, recipient_emails):
-    response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    # Fix: Use transformed bucket_name instead of original bucket
+    bucket_name = bucket.replace('_', '-')
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
 
     for obj in response.get('Contents', []):
         if obj['Key'] == prefix:
@@ -119,17 +121,16 @@ def check_key_expiration(bucket, prefix, days_threshold, notification_threshold,
         remaining_days = days_threshold - age.days
 
         if 0 < remaining_days <= notification_threshold:
-            subject = f"Public key in {bucket}/{prefix} will expire in {remaining_days} days"
-            body = f"The public key {obj['Key']} in {bucket}/{prefix} will expire in {remaining_days} days. Please update."
+            subject = f"Public key in {bucket_name}/{prefix} will expire in {remaining_days} days"
+            body = f"The public key {obj['Key']} in {bucket_name}/{prefix} will expire in {remaining_days} days. Please update."
             send_email(subject, body, recipient_emails)
 
         if remaining_days <= 0:
-            print(f"Key in {bucket}/{prefix} has expired: {obj['Key']}")
+            print(f"Key in {bucket_name}/{prefix} has expired: {obj['Key']}")
             # Add deletion logic here if needed
             if age.days > deletion_threshold:
                 print(f"Deleting expired key: {obj['Key']}")
                 # Delete the public key logic (replace with your actual deletion logic)
-
 
 def check_transfer_pub_keys(username, days_threshold, recipient_emails):
     resp = transfer_client.describe_user(ServerId=tf_server_id, UserName=username)
@@ -207,6 +208,7 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': json.dumps('DONE!')
     }
+    
 
 # For testing purposes
 if __name__ == '__main__':
