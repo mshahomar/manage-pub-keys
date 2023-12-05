@@ -95,20 +95,28 @@ def check_transfer_pub_keys(username):
         age = (datetime.now() - date_imported).days
         keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
 
-    # Sort keys by age in descending order
-    keys.sort(key=lambda x: x[2], reverse=True)
-
-    for i, (pub_key_id, pub_key_body, age) in enumerate(keys):
-        if i == 0:  # Skip the latest public key
-            continue
+    for pub_key_id, pub_key_body, age in keys:
         if notification_threshold <= age < deletion_threshold:
             subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
             body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
-            print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
-            #send_email(subject, body, [recipient_email_1, recipient_email_2])
+            send_email(subject, body, [recipient_email_1, recipient_email_2])
         elif age >= deletion_threshold:
-            print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
-            #transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
+            transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
+
+    # # Sort keys by age in descending order
+    # keys.sort(key=lambda x: x[2], reverse=True)
+
+    # for i, (pub_key_id, pub_key_body, age) in enumerate(keys):
+    #     if i == 0:  # Skip the latest public key
+    #         continue
+    #     if notification_threshold <= age < deletion_threshold:
+    #         subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
+    #         body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
+    #         print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
+    #         #send_email(subject, body, [recipient_email_1, recipient_email_2])
+    #     elif age >= deletion_threshold:
+    #         print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
+    #         #transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
 
 
 def lambda_handler(event, context):
