@@ -82,22 +82,17 @@ def send_email(subject, body, recipients):
 #                 print(f"Deleting expired key: {obj['Key']} as it has exceeded deletion threshold of: {deletion_threshold}")
 #                 # TODO: Delete the public key logic 
 
-                    
 def get_s3_pub_keys(s3_bucket_name):
-    # s3 = boto3.client('s3')
-    try:
-        response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix='KEY/')
-        pub_keys = []
-        for obj in response.get('Contents', []):
-            if obj['Key'].endswith('.pub'):
-                pub_key_response = s3.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
-                pub_key_body = pub_key_response['Body'].read().decode('utf-8')
-                last_modified = pub_key_response['LastModified']
-                pub_keys.append((pub_key_body, last_modified))
-        return pub_keys
-    except NoCredentialsError:
-        print("No AWS credentials found")
-        return []
+    response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix='KEY/')
+    pub_keys = []
+    for obj in response.get('Contents', []):
+        if obj['Key'].endswith('.pub'):
+            pub_key_response = s3.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
+            pub_key_body = pub_key_response['Body'].read().decode('utf-8')
+            last_modified = pub_key_response['LastModified']
+            pub_keys.append((pub_key_body, last_modified))
+    return pub_keys                    
+
 
 def check_transfer_pub_keys(username):
     resp = transfer_client.describe_user(ServerId=tf_server_id, UserName=username)
@@ -107,8 +102,12 @@ def check_transfer_pub_keys(username):
     s3_bucket_name = users['HomeDirectoryMappings'][0]['Target'].split('/')[1]
     print(f"User {username}'s S3 bucket name: {s3_bucket_name}")
 
-    s3_pub_key_body, s3_last_modified = get_s3_pub_key(s3_bucket_name)
-    if s3_pub_key_body is None:
+    # s3_pub_key_body, s3_last_modified = get_s3_pub_key(s3_bucket_name)
+    # if s3_pub_key_body is None:
+    #     return
+    
+    s3_pub_keys = get_s3_pub_keys(s3_bucket_name)
+    if not s3_pub_keys:
         return
 
     keys = []
@@ -118,14 +117,17 @@ def check_transfer_pub_keys(username):
         keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
 
     for pub_key_id, pub_key_body, age in keys:
-        if s3_pub_key_body != pub_key_body and (datetime.now() - s3_last_modified.replace(tzinfo=None)).days < age:
-            transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body)
+        for s3_pub_key_body, s3_last_modified in s3_pub_keys:
+            if s3_pub_key_body != pub_key_body and (datetime.now() - s3_last_modified.replace(tzinfo=None)).days < age:
+                transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body)
         if notification_threshold <= age < deletion_threshold:
             subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
-            body = f"The public key {pub_key_id}  for Transfer user {username} will expire in {deletion_threshold - age} days. Please update. Reference: {pub_key_body}"
-            send_email(subject, body, [recipient_email_1, recipient_email_2])
+            body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
+            print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
+            #send_email(subject, body, [recipient_email_1, recipient_email_2])
         elif age >= deletion_threshold:
-            transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
+            print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
+            # transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id) 
 
     # # Sort keys by age in descending order
     # keys.sort(key=lambda x: x[2], reverse=True)
