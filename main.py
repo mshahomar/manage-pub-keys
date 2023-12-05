@@ -1,7 +1,9 @@
 import boto3
 import json
 import os
+from botocore.exceptions import NoCredentialsError
 from datetime import datetime, timedelta
+
 
 region = "us-west-1"
 sess = boto3.session.Session(region_name=region)
@@ -81,13 +83,33 @@ def send_email(subject, body, recipients):
 #                 # TODO: Delete the public key logic 
 
                     
-# def delete_key(username, key_id):
-#     print(f"****DELETING {key_id}****")
-#     #transfer_client.delete_ssh_public_key(ServerId=tf_server_id, UserName=username, SshPublicKeyId=key_id)
+def get_s3_pub_keys(s3_bucket_name):
+    # s3 = boto3.client('s3')
+    try:
+        response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix='KEY/')
+        pub_keys = []
+        for obj in response.get('Contents', []):
+            if obj['Key'].endswith('.pub'):
+                pub_key_response = s3.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
+                pub_key_body = pub_key_response['Body'].read().decode('utf-8')
+                last_modified = pub_key_response['LastModified']
+                pub_keys.append((pub_key_body, last_modified))
+        return pub_keys
+    except NoCredentialsError:
+        print("No AWS credentials found")
+        return []
 
 def check_transfer_pub_keys(username):
     resp = transfer_client.describe_user(ServerId=tf_server_id, UserName=username)
     users = resp.get('User', [])
+
+    # Extract the user's S3 bucket name
+    s3_bucket_name = users['HomeDirectoryMappings'][0]['Target'].split('/')[1]
+    print(f"User {username}'s S3 bucket name: {s3_bucket_name}")
+
+    s3_pub_key_body, s3_last_modified = get_s3_pub_key(s3_bucket_name)
+    if s3_pub_key_body is None:
+        return
 
     keys = []
     for key in users['SshPublicKeys']:
@@ -96,9 +118,11 @@ def check_transfer_pub_keys(username):
         keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
 
     for pub_key_id, pub_key_body, age in keys:
+        if s3_pub_key_body != pub_key_body and (datetime.now() - s3_last_modified.replace(tzinfo=None)).days < age:
+            transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body)
         if notification_threshold <= age < deletion_threshold:
             subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
-            body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
+            body = f"The public key {pub_key_id}  for Transfer user {username} will expire in {deletion_threshold - age} days. Please update. Reference: {pub_key_body}"
             send_email(subject, body, [recipient_email_1, recipient_email_2])
         elif age >= deletion_threshold:
             transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
