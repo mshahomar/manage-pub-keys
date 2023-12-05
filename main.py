@@ -1,7 +1,7 @@
 import boto3
 import json
 import os
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import BotoCoreError, ClientError
 from datetime import datetime, timedelta
 
 
@@ -87,7 +87,7 @@ def get_s3_pub_keys(s3_bucket_name):
     pub_keys = []
     for obj in response.get('Contents', []):
         if obj['Key'].endswith('.pub'):
-            pub_key_response = s3.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
+            pub_key_response = s3_client.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
             pub_key_body = pub_key_response['Body'].read().decode('utf-8')
             last_modified = pub_key_response['LastModified']
             pub_keys.append((pub_key_body, last_modified))
@@ -119,7 +119,13 @@ def check_transfer_pub_keys(username):
     for pub_key_id, pub_key_body, age in keys:
         for s3_pub_key_body, s3_last_modified in s3_pub_keys:
             if s3_pub_key_body != pub_key_body and (datetime.now() - s3_last_modified.replace(tzinfo=None)).days < age:
-                transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body)
+                try:
+                    transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body, ServerId=tf_server_id)
+                except (BotoCoreError, ClientError) as error:
+                    if error.response['Error']['Code'] == 'ResourceExistsException':
+                        print(f"Public key already exists for user {username}.")
+                    else:
+                        raise
         if notification_threshold <= age < deletion_threshold:
             subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
             body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
