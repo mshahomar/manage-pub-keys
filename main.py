@@ -115,13 +115,22 @@ def check_transfer_pub_keys(username):
     for key in users['SshPublicKeys']:
         date_imported = key['DateImported'].replace(tzinfo=None)
         age = (datetime.now() - date_imported).days
+        print(f"type age: {type(age)}")
         keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
+        if notification_threshold <= age < deletion_threshold:
+            subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
+            body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
+            print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
+            #send_email(subject, body, [recipient_email_1, recipient_email_2])
+        elif age >= deletion_threshold:
+            print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
+            # transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
 
     for s3_pub_key_body, s3_last_modified in s3_pub_keys:
         s3_key_age = (datetime.now() - s3_last_modified.replace(tzinfo=None)).days
         for pub_key_id, pub_key_body, age in keys:
             if s3_pub_key_body == pub_key_body:
-                print(f"Public key in S3 bucket matches with the public key in Transfer Family for user {username}.")
+                print(f"Public key in S3 bucket matches with the public key in Transfer Family for user {username}. No action required.")
             elif s3_pub_key_body != pub_key_body and s3_key_age < notification_threshold:
                 try:
                     print(f"Importing public key to Transfer Family user: {username}")
@@ -131,14 +140,14 @@ def check_transfer_pub_keys(username):
                         print(f"Public key already exists for user {username}.")
                     else:
                         raise
-            if notification_threshold <= age < deletion_threshold:
-                subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
-                body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
-                print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
-                #send_email(subject, body, [recipient_email_1, recipient_email_2])
-            elif age >= deletion_threshold:
-                print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
-                # transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
+            # if notification_threshold <= age < deletion_threshold:
+            #     subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
+            #     body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
+            #     print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
+            #     #send_email(subject, body, [recipient_email_1, recipient_email_2])
+            # elif age >= deletion_threshold:
+            #     print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
+            #     # transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
 
     # # Sort keys by age in descending order
     # keys.sort(key=lambda x: x[2], reverse=True)
