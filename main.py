@@ -4,8 +4,7 @@ import os
 from botocore.exceptions import BotoCoreError, ClientError
 from datetime import datetime, timedelta
 
-
-region = "us-west-1"
+region = "ap-southeast-1"
 sess = boto3.session.Session(region_name=region)
 
 # Boto3 clients
@@ -14,12 +13,12 @@ ses_client = sess.client('ses', aws_access_key_id=os.environ['SES_ACCESS_KEY'], 
 transfer_client = sess.client('transfer')
 
 # Make necessary changes here
-s3_key_threshold = 90
-s3_folder = 'KEY/'
-file_extension = '.pub'
-transfer_key_threshold = 90
-notification_threshold = 5
-deletion_threshold = s3_key_threshold + 10
+# s3_key_threshold = 90
+# s3_folder = 'KEY/'
+# file_extension = '.pub'
+# transfer_key_threshold = 90
+notification_threshold = 10 # 85
+deletion_threshold = 15    # 100
 sender_email = os.environ['SES_SENDER_EMAIL']
 recipient_email_1 = os.environ['SES_RECIPIENT_1']
 recipient_email_2 = os.environ['SES_RECIPIENT_1']
@@ -28,7 +27,7 @@ tf_server_id = os.environ['TF_SERVER_ID']
 
 # Send email using AWS SES
 def send_email(subject, body, recipients):
-    sender = sender_email  # Replace with your SES verified sender email address
+    sender = sender_email 
     charset = 'UTF-8'
 
     response = ses_client.send_email(
@@ -82,6 +81,7 @@ def send_email(subject, body, recipients):
 #                 print(f"Deleting expired key: {obj['Key']} as it has exceeded deletion threshold of: {deletion_threshold}")
 #                 # TODO: Delete the public key logic 
 
+
 def get_s3_pub_keys(s3_bucket_name):
     response = s3_client.list_objects_v2(Bucket=s3_bucket_name, Prefix='KEY/')
     pub_keys = []
@@ -91,7 +91,7 @@ def get_s3_pub_keys(s3_bucket_name):
             pub_key_body = pub_key_response['Body'].read().decode('utf-8')
             last_modified = pub_key_response['LastModified']
             pub_keys.append((pub_key_body, last_modified))
-    return pub_keys                    
+    return pub_keys 
 
 
 def check_transfer_pub_keys(username):
@@ -102,12 +102,13 @@ def check_transfer_pub_keys(username):
     s3_bucket_name = users['HomeDirectoryMappings'][0]['Target'].split('/')[1]
     print(f"User {username}'s S3 bucket name: {s3_bucket_name}")
 
-    # s3_pub_key_body, s3_last_modified = get_s3_pub_key(s3_bucket_name)
+    # s3_pub_key_body, s3_last_modified = get_s3_pub_keys(s3_bucket_name)
     # if s3_pub_key_body is None:
     #     return
     
     s3_pub_keys = get_s3_pub_keys(s3_bucket_name)
     if not s3_pub_keys:
+        print(f"No public key found on {s3_bucket_name} for user {username}")
         return
 
     keys = []
@@ -115,22 +116,27 @@ def check_transfer_pub_keys(username):
         date_imported = key['DateImported'].replace(tzinfo=None)
         age = (datetime.now() - date_imported).days
         keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
-
+    
     for pub_key_id, pub_key_body, age in keys:
         for s3_pub_key_body, s3_last_modified in s3_pub_keys:
-            if s3_pub_key_body != pub_key_body and (datetime.now() - s3_last_modified.replace(tzinfo=None)).days < age:
+            s3_key_age = (datetime.now() - s3_last_modified.replace(tzinfo=None)).days
+            print(f">>>>> s3_pub_key_body: {s3_pub_key_body} \npub_key_body: {pub_key_body} \ns3_key_age: {s3_key_age}")
+            if s3_pub_key_body != pub_key_body and s3_key_age < notification_threshold:
                 try:
+                    print(f"+++++Importing public key to TF user: {username}")
                     transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body, ServerId=tf_server_id)
                 except (BotoCoreError, ClientError) as error:
                     if error.response['Error']['Code'] == 'ResourceExistsException':
                         print(f"Public key already exists for user {username}.")
                     else:
                         raise
+
         if notification_threshold <= age < deletion_threshold:
             subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
             body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
             print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
             #send_email(subject, body, [recipient_email_1, recipient_email_2])
+            
         elif age >= deletion_threshold:
             print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
             # transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id) 
@@ -159,8 +165,9 @@ def lambda_handler(event, context):
 
     # Check Transfer Family user keys for expiration
     for user in transfer_users:
-        print(f">>>> Checking Key Expiration in TF for user {user}")
+        print(f"{'*' * 10} Checking Key Expiration in TF for user {user} {'*' * 10}")
         check_transfer_pub_keys(user)
+        print("*" * 40)
 
     return {
         'statusCode': 200,
