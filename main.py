@@ -66,7 +66,7 @@ def check_transfer_pub_keys(username):
 
     keys = []
     
-    print(f"Checking {username}'s public key in Transfer Family")
+    print(f"Checking {username}'s public key in Transfer Family:")
 
     if len(users['SshPublicKeys']) < 1:
         print(f"No public key found in Transfer Family for user {username}")
@@ -78,10 +78,12 @@ def check_transfer_pub_keys(username):
             keys.append((key['SshPublicKeyId'], key['SshPublicKeyBody'], age))
             
         for pub_key_id, pub_key_body, age in keys:
+            print(f"PubKeyId: {pub_key_id} \nPubKeyBody: {pub_key_body} \nAge: {age}")
+            print("-" * 40)
             if notification_threshold <= age < deletion_threshold:
-                subject = f"Transfer user {username}'s key will expire in {deletion_threshold - age} days"
-                body = f"The public key {pub_key_id} for Transfer user {username} will expire in {deletion_threshold - age} days. Please update."
-                print(f"Sending Email on expiration of public key {pub_key_id} for Transfer user {username} which will expire in {deletion_threshold - age} days.")
+                subject = f"Transfer Family user {username}'s key will expire in {deletion_threshold - age} days"
+                body = f"Public key {pub_key_id} for Transfer Family user {username}: \n{pub_key_body} \nwill expire in {deletion_threshold - age} days. Please update."
+                print(f"Sending email to notify that {pub_key_id} with public key body: \n{pub_key_body} \nfor Transfer Family user {username} will expire in {deletion_threshold - age} days.")
                 send_email(subject, body, [recipient_email_1, recipient_email_2])
             elif age >= deletion_threshold:
                 print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
@@ -90,7 +92,7 @@ def check_transfer_pub_keys(username):
     
     # Extract the user's S3 bucket name
     s3_bucket_name = users['HomeDirectoryMappings'][0]['Target'].split('/')[1]
-    print(f"Checking {username}'s public key in S3 bucket {s3_bucket_name}")
+    print(f"Checking {username}'s public key in S3 bucket {s3_bucket_name}:")
     
     s3_pub_keys = get_s3_pub_keys(s3_bucket_name)
     if not s3_pub_keys:
@@ -101,11 +103,12 @@ def check_transfer_pub_keys(username):
         s3_key_age = (datetime.now() - s3_last_modified.replace(tzinfo=None)).days
         for pub_key_id, pub_key_body, age in keys:
             if s3_pub_key_body == pub_key_body:
-                print(f"Public key in S3 bucket: {s3_pub_key_body} \nmatches with the public key in Transfer Family: {pub_key_body} for user {username}. No action required.")
+                print(f"Public key in S3 bucket: {s3_pub_key_body} \nPublic key in Transfer Family: {pub_key_body} \nBoth keys are similar for user {username}. This key will not be imported.")
             elif s3_pub_key_body != pub_key_body and s3_key_age < notification_threshold:
+                print(f"Public key in S3 bucket: {s3_pub_key_body} \nPublic key in Transfer Family: {pub_key_body} \nBoth keys are different for user {username}. This key will be imported.")
                 try:
-                    print(f"Attempting to import public key to Transfer Family user: {username}")
                     transfer_client.import_ssh_public_key(UserName=username, SshPublicKeyBody=s3_pub_key_body, ServerId=tf_server_id)
+                    print(f"Imported public key to Transfer Family user: {username}")
                 except (BotoCoreError, ClientError) as error:
                     if error.response['Error']['Code'] == 'ResourceExistsException':
                         print(f"Public key already exists for user {username}.")
@@ -120,11 +123,13 @@ def lambda_handler(event, context):
 
     # Check Transfer Family user keys for expiration
     for user in transfer_users:
-        print(f"{'*' * 5} Checking SSH Public Keys for TF user {user} {'*' * 5}")
+        title = f"Checking SSH Public Keys for TF user {user}"
+        print("*" * (len(title) + 6))
+        print(f"{'*' * 2} {title} {'*' * 2}")
+        print("*" * (len(title) + 6))
         check_transfer_pub_keys(user)
-        print("*" * 40)
 
     return {
         'statusCode': 200,
         'body': json.dumps('DONE!')
-    }    
+    }       
