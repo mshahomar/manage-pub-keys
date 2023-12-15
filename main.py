@@ -1,10 +1,15 @@
 import boto3
+import boto3
 import json
 import os
 from botocore.exceptions import BotoCoreError, ClientError
 from datetime import datetime, timedelta
 
-region = "ap-southeast-1"
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import smtplib
+
+region = os.environ['REGION']
 sess = boto3.session.Session(region_name=region)
 
 # Boto3 clients
@@ -14,10 +19,10 @@ transfer_client = sess.client('transfer')
 
 # Make necessary changes here
 notification_threshold = 85 # 85
-deletion_threshold = 100    # 100
+deletion_threshold = 100 # 100
 sender_email = os.environ['SES_SENDER_EMAIL']
 recipient_email_1 = os.environ['SES_RECIPIENT_1']
-recipient_email_2 = os.environ['SES_RECIPIENT_1']
+recipient_email_2 = os.environ['SES_RECIPIENT_2']
 tf_server_id = os.environ['TF_SERVER_ID']
 
 
@@ -53,10 +58,17 @@ def get_s3_pub_keys(s3_bucket_name):
     pub_keys = []
     for obj in response.get('Contents', []):
         if obj['Key'].endswith('.pub'):
-            pub_key_response = s3_client.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
-            pub_key_body = pub_key_response['Body'].read().decode('utf-8')
-            last_modified = pub_key_response['LastModified']
-            pub_keys.append((pub_key_body, last_modified))
+            try:
+                pub_key_response = s3_client.get_object(Bucket=s3_bucket_name, Key=obj['Key'])
+                pub_key_body = pub_key_response['Body'].read().decode('utf-8')
+                last_modified = pub_key_response['LastModified']
+                pub_keys.append((pub_key_body, last_modified))
+            except ClientError as error:
+                if error.response['Error']['Code'] == 'InvalidObjectState':
+                    print(f"Error retrieving object from {s3_bucket_name} since object is in Deep Archive. Please restore first!")
+                    return
+                else:
+                    raise error
     return pub_keys 
 
 
@@ -80,14 +92,15 @@ def check_transfer_pub_keys(username):
         for pub_key_id, pub_key_body, age in keys:
             print(f"PubKeyId: {pub_key_id} \nPubKeyBody: {pub_key_body} \nAge: {age}")
             print("-" * 40)
+
             if notification_threshold <= age < deletion_threshold:
-                subject = f"Transfer Family user {username}'s key will expire in {deletion_threshold - age} days"
-                body = f"Public key {pub_key_id} for Transfer Family user {username}: \n{pub_key_body} \nwill expire in {deletion_threshold - age} days. Please update."
+                subject = f"Transfer Family user: {username} SSH Public Key will expire in {deletion_threshold - age} days."
+                body = f"The following SSH Public Key will expire in {deletion_threshold - age} days. Please Update. \n\nUserName: {username} \nPublic Key Id: {pub_key_id} \nPublic Key Body: {pub_key_body} \nAge: {age} days."
                 print(f"Sending email to notify that {pub_key_id} with public key body: \n{pub_key_body} \nfor Transfer Family user {username} will expire in {deletion_threshold - age} days.")
                 send_email(subject, body, [recipient_email_1, recipient_email_2])
             elif age >= deletion_threshold:
                 print(f"Deleting expired key: {pub_key_id} as it has exceeded deletion threshold of: {deletion_threshold}")
-                transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id)
+                transfer_client.delete_ssh_public_key(UserName=username, SshPublicKeyId=pub_key_id, ServerId=tf_server_id)
 
     
     # Extract the user's S3 bucket name
